@@ -1,0 +1,13 @@
+{
+  "name": "bsb-status",
+  "version": "1.0.0",
+  "description": "bsb-bank finance statistic checker",
+  "main": "index.js",
+  "repository": "git@github.com:vpanteleev/bsb-status.git",
+  "author": "Vladimir Panteleev <vovapanteleev@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "google-auth-library": "^0.10.0",
+    "googleapis": "^16.0.0"
+  }
+}
