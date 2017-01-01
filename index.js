@@ -3,6 +3,7 @@ var fs = require('fs');
 var readline = require('readline');
 var google = require('googleapis');
 var googleAuth = require('google-auth-library');
+var moment = require('moment');
 
 // If modifying these scopes, delete your previously saved credentials
 // at ~/.credentials/gmail-nodejs-quickstart.json
@@ -128,8 +129,23 @@ function listLabels(auth) {
   }));
 
     return Promise.all(messagePromises).then(res => {
-        let bodies = res.map(message => message.snippet);
-        console.log(bodies);
+        let data = res.map(message => message.snippet).map((body) => {
+            let arr = body.split(/Summa:|Ostatok:/);
+            let date = moment((arr[0].split(/Uspeshno/)[1] || '').trim()).toDate();
+            let value = parseFloat((arr[1] || '').trim().slice(0, -4));
+            let currency = (arr[1] || '').trim().slice(-3);
+            let place = (arr[2].split(/BYN/)[1] || '').trim();
+            return {date, value, currency, place};
+        }).filter((rawData) => rawData.date && rawData.value && rawData.place);
+        console.log(data);
+        let summa = data.filter((rawData) => rawData.place === 'BLR/MINSK/SHOP&quot;SUPERMARKET BIGZZ&quot;BAPB')
+        .map(rawValue => rawValue.value)
+        .reduce((previousValue, currentValue, index, array) => {
+            let sum = previousValue + currentValue;
+            return sum;
+        });
+
+        console.log(summa);
     });
 });
 }
