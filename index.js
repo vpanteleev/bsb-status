@@ -1,4 +1,5 @@
-let fs = require('fs');
+let promisify = require("promisify-node");
+let fs = promisify("fs");
 let readline = require('readline');
 let google = require('googleapis');
 let googleAuth = require('google-auth-library');
@@ -8,6 +9,7 @@ let fx = require('money');
 let babar = require('babar');
 let rates = require('./rates.json');
 let placeMapper = require('./places.json');
+let gmail = google.gmail('v1');
 
 oxr.set({app_id: '00a00828253e4b67841fc0161fde095d'})
 
@@ -17,73 +19,82 @@ let SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
 let TOKEN_DIR = (process.env.HOME || process.env.HOMEPATH || process.env.USERPROFILE) + '/.credentials/';
 let TOKEN_PATH = TOKEN_DIR + 'gmail-nodejs-quickstart.json';
 
-// Load client secrets from a local file.
-fs.readFile('client_secret.json', (err, content) => {
-    if (err) {
-        console.log('Error loading client secret file: ' + err);
-        return;
-    }
-    // Authorize a client with the loaded credentials, then call the
-    // Gmail API.
-    authorize(JSON.parse(content), getStatistics);
-});
+return getCurrencyExchangeRates()
+    .then(() => fs.readFile('client_secret.json'))
+    .then(data => authorize(JSON.parse(data)))
+    .then((oauth) => getMessageList(oauth)
+            .then(response =>
+                Promise.all(response.messages.map(message => getMessage(oauth, message)))
+            )
+    ).then(res => {
+        let data = res
+            .map(message => parseDataString(message.snippet))
+            .filter((rawData) => rawData.date && rawData.value && rawData.place)
+            .map(convertCurrency)
+            .map(rawData => {
+                let place = placeMapper[rawData.place] || rawData.place;
 
-/**
- * Create an OAuth2 client with the given credentials, and then execute the
- * given callback function.
- *
- * @param {Object} credentials The authorization client credentials.
- * @param {function} callback The callback to call with the authorized client.
- */
-function authorize(credentials, callback) {
+                return Object.assign(rawData, {place});
+            });
+
+        let places = data.map(rawData => rawData.place);
+        let uniquePlaces = places.filter((elem, pos) => places.indexOf(elem) === pos);
+
+        let valueByPlace = uniquePlaces.map((place) => {
+            return {
+                place,
+                value: getSum(data, place)
+            };
+        }).sort((a, b) => (b.value - a.value));
+
+        let barsValues = valueByPlace.map((bar, index) => [index, bar.value]);
+        let valueByPlaceView = valueByPlace.map((bar, index) => [
+            index,
+            bar.place,
+            Math.round(bar.value)
+        ]);
+
+        console.log(babar(barsValues, {
+            color: 'green',
+            width: 160,
+            height: 20,
+            yFractions: 1
+        }));
+
+        console.log(valueByPlaceView);
+    }).catch(console.error);
+
+function authorize(credentials) {
     let clientSecret = credentials.installed.client_secret;
     let clientId = credentials.installed.client_id;
     let redirectUrl = credentials.installed.redirect_uris[0];
     let auth = new googleAuth();
     let oauth2Client = new auth.OAuth2(clientId, clientSecret, redirectUrl);
-
     // Check if we have previously stored a token.
-    fs.readFile(TOKEN_PATH, (err, token) => {
-        if (err) {
-            getNewToken(oauth2Client, callback);
-        } else {
-            oauth2Client.credentials = JSON.parse(token);
-            callback(oauth2Client);
-        }
-    });
+    return fs.readFile(TOKEN_PATH)
+        .then(token => Object.assign(oauth2Client, {credentials: JSON.parse(token)}))
+        .catch(e => getNewToken(oauth2Client));
 }
 
-/**
- * Get and store new token after prompting for user authorization, and then
- * execute the given callback with the authorized OAuth2 client.
- *
- * @param {google.auth.OAuth2} oauth2Client The OAuth2 client to get token for.
- * @param {getEventsCallback} callback The callback to call with the authorized
- *     client.
- */
-function getNewToken(oauth2Client, callback) {
-    let authUrl = oauth2Client.generateAuthUrl({access_type: 'offline', scope: SCOPES});
-    console.log('Authorize this app by visiting this url: ', authUrl);
-    let rl = readline.createInterface({input: process.stdin, output: process.stdout});
-    rl.question('Enter the code from that page here: ', code => {
-        rl.close();
-        oauth2Client.getToken(code, (err, token) => {
-            if (err) {
-                console.log('Error while trying to retrieve access token', err);
-                return;
-            }
-            oauth2Client.credentials = token;
-            storeToken(token);
-            callback(oauth2Client);
+function getNewToken(oauth2Client) {
+    return new Promise((resolve, reject) => {
+        let authUrl = oauth2Client.generateAuthUrl({access_type: 'offline', scope: SCOPES});
+        console.log('Authorize this app by visiting this url: ', authUrl);
+        let rl = readline.createInterface({input: process.stdin, output: process.stdout});
+        rl.question('Enter the code from that page here: ', code => {
+            rl.close();
+            oauth2Client.getToken(code, (err, token) => {
+                if (err) {
+                    reject(err);
+                }
+                oauth2Client.credentials = token;
+                storeToken(token);
+                resolve(oauth2Client);
+            });
         });
     });
 }
 
-/**
- * Store token to disk be used in later program executions.
- *
- * @param {Object} token The token to store to disk.
- */
 function storeToken(token) {
     try {
         fs.mkdirSync(TOKEN_DIR);
@@ -96,82 +107,34 @@ function storeToken(token) {
     console.log('Token stored to ' + TOKEN_PATH);
 }
 
-/**
- * Lists the labels in the user's account.
- *
- * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
- */
-function getStatistics(auth) {
-    let gmail = google.gmail('v1');
-    let messages;
-    gmail.users.messages.list({
-        auth: auth,
-        userId: 'me',
-        q: 'bsb-bank card transaction after:2016/12/01 before:2017/01/01'
-    }, function(err, response) {
-        if (err) {
-            console.log('The API returned an error: ' + err);
-            return;
-        }
-        getMessages = response.messages.map(message => new Promise((resolve, reject) => {
-            gmail.users.messages.get({
-                auth: auth,
-                userId: 'me',
-                id: message.id
-            }, (err, response) => {
-                if (err) {
-                    reject('The API returned an error: ' + err);
-                }
+function getMessage(auth, message) {
+    return new Promise((resolve, reject) => {
+        gmail.users.messages.get({
+            auth: auth,
+            userId: 'me',
+            id: message.id
+        }, (err, response) => {
+            if (err) {
+                reject('The API returned an error: ' + err);
+            }
 
-                resolve(response);
-            })
-        }));
+            resolve(response);
+        })
+    })
+}
 
-        return getCurrencyExchangeRates().then(rates => {
-            Object.assign(fx, oxr);
-            fs.writeFile('./rates.json', JSON.stringify(oxr, null, 2), 'utf-8');
-        }).catch(err => {
-            Object.assign(fx, rates);
-        }).then(() => {
-            return Promise.all(getMessages).then(res => {
-                let data = res
-                    .map(message => message.snippet)
-                    .map(parseDataString)
-                    .filter((rawData) => rawData.date && rawData.value && rawData.place)
-                    .map(convertCurrency)
-                    .map(rawData => {
-                        let data = Object.assign({}, rawData);
-                        data.place = placeMapper[rawData.place] || rawData.place;
+function getMessageList(auth) {
+    return new Promise((resolve, reject) => {
+        gmail.users.messages.list({
+            auth: auth,
+            userId: 'me',
+            q: 'bsb-bank card transaction after:2016/12/01 before:2017/01/01'
+        }, function(err, response) {
+            if (err) {
+                reject(err);
+            }
 
-                        return data;
-                    });
-
-                let places = data.map(rawData => rawData.place);
-                let uniquePlaces = places.filter((elem, pos) => places.indexOf(elem) == pos);
-
-                let valueByPlace = uniquePlaces.map((place) => {
-                    return {
-                        place,
-                        value: getSum(data, place)
-                    };
-                }).sort((a, b) => (b.value - a.value));
-
-                let barsValues = valueByPlace.map((bar, index) => [index, bar.value]);
-                let valueByPlaceView = valueByPlace.map((bar, index) => [
-                    index,
-                    bar.place,
-                    Math.round(bar.value)
-                ]);
-
-                console.log(babar(barsValues, {
-                    color: 'green',
-                    width: 160,
-                    height: 20,
-                    yFractions: 1
-                }));
-
-                console.log(valueByPlaceView);
-            });
+            resolve(response);
         });
     });
 }
@@ -185,6 +148,11 @@ function getCurrencyExchangeRates() {
 
             resolve({rates: oxr.rates, base: oxr.base});
         });
+    }).then(rates => {
+        Object.assign(fx, oxr);
+        fs.writeFile('./rates.json', JSON.stringify(oxr, null, 2), 'utf-8');
+    }).catch(err => {
+        Object.assign(fx, rates);
     })
 }
 
