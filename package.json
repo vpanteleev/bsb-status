@@ -13,6 +13,7 @@
     "googleapis": "^16.0.0",
     "moment": "^2.17.1",
     "money": "^0.2.0",
+    "node-telegram-bot-api": "^0.25.0",
     "open-exchange-rates": "^0.3.0",
     "plotly": "^1.0.6",
     "promisify-node": "^0.4.0"

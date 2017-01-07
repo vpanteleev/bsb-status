@@ -12,6 +12,25 @@ let placeMapper = require('./places.json');
 let gmail = google.gmail('v1');
 let creds = require('./creds.json');
 let plotly = require('plotly')(creds.plotly.owner, creds.plotly.token);
+let TelegramBot = require('node-telegram-bot-api');
+var bot = new TelegramBot(creds.telegram.botToken, { polling: true });
+
+bot.onText(/\/getStatistics (.+)/, function (msg, match) {
+  // 'msg' is the received Message from Telegram
+  // 'match' is the result of executing the regexp above on the text content
+  // of the message
+
+  console.log('GET REQUEST');
+  var chatId = msg.chat.id;
+
+  // send back the matched "whatever" to the chat
+  return getStatistics()
+    .then((msg) => {
+        bot.sendMessage(chatId, msg.url);
+        var fileStream = fs.createReadStream(`public/${msg.filename}.png`);
+        bot.sendPhoto(chatId, fileStream);
+    })
+});
 
 oxr.set({app_id: creds.oxr.app_id});
 
@@ -21,49 +40,51 @@ let SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
 let TOKEN_DIR = (process.env.HOME || process.env.HOMEPATH || process.env.USERPROFILE) + '/.credentials/';
 let TOKEN_PATH = TOKEN_DIR + 'gmail-nodejs-quickstart.json';
 
-return getCurrencyExchangeRates()
-    .then(() => fs.readFile('client_secret.json'))
-    .then(data => authorize(JSON.parse(data)))
-    .then((oauth) => getMessageList(oauth)
-            .then(response =>
-                Promise.all(response.messages.map(message => getMessage(oauth, message)))
-            )
-    ).then(res => {
-        let data = res
-            .map(message => parseDataString(message.snippet))
-            .filter((rawData) => rawData.date && rawData.value && rawData.place)
-            .map(convertCurrency)
-            .map(rawData => {
-                let place = placeMapper[rawData.place] || rawData.place;
+function getStatistics() {
+    return getCurrencyExchangeRates()
+        .then(() => fs.readFile('client_secret.json'))
+        .then(data => authorize(JSON.parse(data)))
+        .then((oauth) => getMessageList(oauth)
+                .then(response =>
+                    Promise.all(response.messages.map(message => getMessage(oauth, message)))
+                )
+        ).then(res => {
+            let data = res
+                .map(message => parseDataString(message.snippet))
+                .filter((rawData) => rawData.date && rawData.value && rawData.place)
+                .map(convertCurrency)
+                .map(rawData => {
+                    let place = placeMapper[rawData.place] || rawData.place;
 
-                return Object.assign(rawData, {place});
+                    return Object.assign(rawData, {place});
+                });
+
+            let places = data.map(rawData => rawData.place);
+            let uniquePlaces = places.filter((elem, pos) => places.indexOf(elem) === pos);
+
+            let valueByPlace = uniquePlaces.map((place) => {
+                return {
+                    place,
+                    value: getSum(data, place)
+                };
+            }).sort((a, b) => (b.value - a.value));
+
+            var barsData = [
+              {
+                x: valueByPlace.map((rawData) => rawData.place),
+                y: valueByPlace.map((rawData) => rawData.value),
+                type: "bar",
+              }
+            ];
+
+            var graphOptions = {filename: `${+new Date()}`, fileopt: "overwrite"};
+
+            return createChart(barsData, graphOptions).then((msg) => {
+                console.log('Done!')
+                return msg;
             });
-
-        let places = data.map(rawData => rawData.place);
-        let uniquePlaces = places.filter((elem, pos) => places.indexOf(elem) === pos);
-
-        let valueByPlace = uniquePlaces.map((place) => {
-            return {
-                place,
-                value: getSum(data, place)
-            };
-        }).sort((a, b) => (b.value - a.value));
-
-        var barsData = [
-          {
-            x: valueByPlace.map((rawData) => rawData.place),
-            y: valueByPlace.map((rawData) => rawData.value),
-            type: "bar",
-          }
-        ];
-
-        var graphOptions = {filename: `${+new Date()}`, fileopt: "overwrite"};
-
-        return createChart(barsData, graphOptions).then((msg) => {
-            console.log('Done!')
-            console.log(msg);
-        });
-    }).catch(console.error);
+        }).catch(console.error);
+}
 
 function authorize(credentials) {
     let clientSecret = credentials.installed.client_secret;
@@ -194,7 +215,7 @@ function createChart(data, graphOptions) {
                 };
 
                 plotly.getImage(figure, imgOpts, function (error, imageStream) {
-                    var fileStream = fs.createWriteStream(`public/${+ new Date()}.png`);
+                    var fileStream = fs.createWriteStream(`public/${graphOptions.filename}.png`);
                     imageStream.pipe(fileStream);
                     fileStream.on('finish', () => {
                         resolve(msg)
