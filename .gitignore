@@ -28,6 +28,7 @@ build/Release
 
 # Dependency directories
 node_modules
+public
 jspm_packages
 
 # Optional npm cache directory
@@ -38,3 +39,7 @@ jspm_packages
 
 #secrets
 client_secret.json
+creds.json
+
+#MacOs
+.DS_Store

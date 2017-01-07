@@ -10,8 +10,10 @@ let babar = require('babar');
 let rates = require('./rates.json');
 let placeMapper = require('./places.json');
 let gmail = google.gmail('v1');
+let creds = require('./creds.json');
+let plotly = require('plotly')(creds.plotly.owner, creds.plotly.token);
 
-oxr.set({app_id: '00a00828253e4b67841fc0161fde095d'})
+oxr.set({app_id: creds.oxr.app_id});
 
 // If modifying these scopes, delete your previously saved credentials
 // at ~/.credentials/gmail-nodejs-quickstart.json
@@ -47,21 +49,20 @@ return getCurrencyExchangeRates()
             };
         }).sort((a, b) => (b.value - a.value));
 
-        let barsValues = valueByPlace.map((bar, index) => [index, bar.value]);
-        let valueByPlaceView = valueByPlace.map((bar, index) => [
-            index,
-            bar.place,
-            Math.round(bar.value)
-        ]);
+        var barsData = [
+          {
+            x: valueByPlace.map((rawData) => rawData.place),
+            y: valueByPlace.map((rawData) => rawData.value),
+            type: "bar",
+          }
+        ];
 
-        console.log(babar(barsValues, {
-            color: 'green',
-            width: 160,
-            height: 20,
-            yFractions: 1
-        }));
+        var graphOptions = {filename: `${+new Date()}`, fileopt: "overwrite"};
 
-        console.log(valueByPlaceView);
+        return createChart(barsData, graphOptions).then((msg) => {
+            console.log('Done!')
+            console.log(msg);
+        });
     }).catch(console.error);
 
 function authorize(credentials) {
@@ -180,4 +181,26 @@ function convertCurrency(rawData) {
     }
 
     return data;
+}
+
+function createChart(data, graphOptions) {
+    return new Promise((resolve, reject) => {
+        plotly.plot(data, graphOptions, function (err, msg) {
+            plotly.getFigure('vpanteleev', msg.url.split('/').pop(), function (err, figure) {
+                let imgOpts = {
+                    format: 'png',
+                    width: 1280,
+                    height: 720
+                };
+
+                plotly.getImage(figure, imgOpts, function (error, imageStream) {
+                    var fileStream = fs.createWriteStream(`public/${+ new Date()}.png`);
+                    imageStream.pipe(fileStream);
+                    fileStream.on('finish', () => {
+                        resolve(msg)
+                    });
+                });
+            });
+        });
+    });
 }
